@@ -19,6 +19,9 @@ import json
 import os
 import shutil
 import unittest
+from subprocess import check_call
+from unittest import mock
+from unittest.mock import ANY
 
 import kubernetes.client.models as k8s
 import pytest
@@ -32,6 +35,7 @@ from airflow.kubernetes.pod import Port
 from airflow.kubernetes.pod_generator import PodDefaults
 from airflow.kubernetes.pod_launcher import PodLauncher
 from airflow.kubernetes.secret import Secret
+from airflow.kubernetes.volume import Volume
 from airflow.kubernetes.volume_mount import VolumeMount
 from airflow.version import version as airflow_version
 from tests.compat import mock
@@ -67,6 +71,11 @@ class TestKubernetesPodOperator(unittest.TestCase):
                     'envFrom': [],
                     'name': 'base',
                     'ports': [],
+                    'resources': {'limits': {'cpu': None,
+                                             'memory': None,
+                                             'nvidia.com/gpu': None},
+                                  'requests': {'cpu': None,
+                                               'memory': None}},
                     'volumeMounts': [],
                 }],
                 'hostNetwork': False,
@@ -114,9 +123,9 @@ class TestKubernetesPodOperator(unittest.TestCase):
             labels={"foo": "bar"},
             name="test",
             task_id="task",
-            config_file=file_path,
             in_cluster=False,
             do_xcom_push=False,
+            config_file=file_path,
             cluster_context='default',
         )
         launcher_mock.return_value = (State.SUCCESS, None)
@@ -124,7 +133,7 @@ class TestKubernetesPodOperator(unittest.TestCase):
         client_mock.assert_called_once_with(
             in_cluster=False,
             cluster_context='default',
-            config_file=file_path
+            config_file=file_path,
         )
 
     @mock.patch("airflow.kubernetes.pod_launcher.PodLauncher.run_pod")
@@ -289,7 +298,17 @@ class TestKubernetesPodOperator(unittest.TestCase):
         )
         k.execute(None)
         actual_pod = self.api_client.sanitize_for_serialization(k.pod)
-        self.expected_pod['spec']['containers'][0]['resources'] = resources
+        self.expected_pod['spec']['containers'][0]['resources'] = {
+            'requests': {
+                'memory': '64Mi',
+                'cpu': '250m'
+            },
+            'limits': {
+                'memory': '64Mi',
+                'cpu': 0.25,
+                'nvidia.com/gpu': None
+            }
+        }
         self.assertEqual(self.expected_pod, actual_pod)
 
     def test_pod_affinity(self):
@@ -500,7 +519,7 @@ class TestKubernetesPodOperator(unittest.TestCase):
             in_cluster=False,
             do_xcom_push=False,
             startup_timeout_seconds=5,
-            service_account_name=bad_service_account_name
+            service_account_name=bad_service_account_name,
         )
         with self.assertRaises(ApiException):
             k.execute(None)
